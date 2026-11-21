@@ -1,6 +1,6 @@
-# Droidian (API 28) for Huawei Honor 9 Lite (LLD-L31 / `hi6250`)
+# Droidian (API 28) for `hi6250`
 
-Unofficial community port of **Droidian (Halium 9 / API 28)** for the **Huawei Honor 9 Lite (`hi6250` / Kirin 659)** running **EMUI 9.1** vendor firmware.
+Unofficial community port of **Droidian (Halium 9 / API 28)** for **`hi6250` (Kirin 65x) devices** running **EMUI 9.1** vendor firmware. Tested on Huawei Honor 9 Lite (`leland`, `LLD-L31`).
 
 Because this port is still incomplete and **EMUI 9.1 on Kirin 659 lacks standard `boot` and `ramdisk` partitions** (requiring the Halium initramfs to be unpacked directly onto the `system` partition while mounting `rootfs.img` from `f2fs` `userdata`), this adaptation is maintained as a standalone repository rather than an upstream Droidian device package.
 
