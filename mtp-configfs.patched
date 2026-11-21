@@ -1,0 +1,244 @@
+#!/bin/bash
+
+CONFIGFS=/sys/kernel/config
+ANDROID_USB=/sys/class/android_usb/android0
+CONFIGDIR=$CONFIGFS/usb_gadget
+GADGETDIR=$CONFIGDIR/g1
+CONFIGNAME="c.1"
+USBMODE=rndis
+RNDISCONFIG=rndis.rndis
+MTPCONFIG=mtp.gs0
+METHOD=configfs
+
+IDVENDOR="0x2717"
+IDPRODUCT="0xFF20"
+BCDDEVICE="0x0223"
+BCDUSB="0x0200"
+
+SERIALNUMBER=$(getprop ro.serialno)
+MANUFACTURER=$(getprop ro.product.vendor.manufacturer)
+PRODUCT=$(getprop ro.product.vendor.model)
+CONTROLLER=$(getprop sys.usb.controller)
+
+if grep -q -i "EXYNOS" /proc/device-tree/model; then
+   IS_EXYNOS=true
+else
+   IS_EXYNOS=false
+fi
+
+if [ ! -f /usr/lib/droidian/device/mtp-supported ]; then
+   echo "MTP not supported. exiting"
+   exit 0
+fi
+
+if [ -f /usr/lib/droidian/device/mtp-configfs.conf ]; then
+   CONFIG_FILE=/usr/lib/droidian/device/mtp-configfs.conf
+elif [ -f /etc/mtp-configfs.conf ]; then
+   CONFIG_FILE=/etc/mtp-configfs.conf
+else
+   echo "No config files available. exiting"
+   exit 0
+fi
+
+if [ "$METHOD" = "configfs" ]; then
+    rm -rf $GADGETDIR/configs/$CONFIGNAME 2> /dev/null
+fi
+
+while read line; do
+    if ! [[ $line == *=* ]]; then
+        continue
+    fi
+    declare \
+        $(echo "$line" | cut -d= -f1)=$(
+            echo "$line" | \
+            cut -d= -f2- | \
+            sed -e "s|\$CONFIGFS|$CONFIGFS|g" \
+                -e "s|\${CONFIGFS}|$CONFIGFS|g" \
+                -e "s|\$CONFIGDIR|$CONFIGDIR|g" \
+                -e "s|\${CONFIGDIR}|$CONFIGDIR|g" \
+                -e "s|\"||g" \
+                -e "s|'||g")
+done < $CONFIG_FILE
+
+# First argument overrides the USBMODE
+[ -z "${1}" ] || USBMODE="${1}"
+
+# kill DHCP server if running
+pid=$(cat /run/hybris-usb/dhcpd4.pid 2>/dev/null)
+kill $pid 2>/dev/null
+
+if [ "$USBMODE" = "mtp" ]; then
+    if [ "$METHOD" = "configfs" ]; then
+        if [ ! -e "$GADGETDIR/functions/$MTPCONFIG" ]; then
+            if ! mount | grep -q "$CONFIGFS"; then
+                mount -t configfs none $CONFIGFS
+                mkdir -p $GADGETDIR/strings/0x409
+                mkdir -p $GADGETDIR/functions/$RNDISCONFIG
+                mkdir -p $GADGETDIR/functions/rndis.usb0
+                mkdir -p $GADGETDIR/functions/rndis_bam.rndis
+                mkdir -p $GADGETDIR/configs/$CONFIGNAME/strings/0x409
+            fi
+
+            printf "$IDVENDOR" > $GADGETDIR/idVendor
+            printf "$IDPRODUCT" > $GADGETDIR/idProduct
+            printf "$BCDDEVICE" > $GADGETDIR/bcdDevice
+            printf "$BCDUSB" > $GADGETDIR/bcdUSB
+            printf "1" > $GADGETDIR/os_desc/use
+            printf "0x1" > $GADGETDIR/os_desc/b_vendor_code
+            printf "MSFT100" > $GADGETDIR/os_desc/qw_sign
+            printf "$SERIALNUMBER" > $GADGETDIR/strings/0x409/serialnumber
+            printf "$MANUFACTURER" > $GADGETDIR/strings/0x409/manufacturer
+            printf "$PRODUCT" > $GADGETDIR/strings/0x409/product
+
+            mkdir -p $GADGETDIR/functions/$MTPCONFIG
+            ln -s $GADGETDIR/configs/$CONFIGNAME $GADGETDIR/os_desc/$CONFIGNAME
+
+            chown root:plugdev $GADGETDIR
+            chown root:plugdev $GADGETDIR/configs
+            chown root:plugdev $GADGETDIR/configs/$CONFIGNAME
+
+            chown root:plugdev /dev/mtp_usb
+            chmod 660 /dev/mtp_usb
+        fi
+
+        rm -f $GADGETDIR/configs/$CONFIGNAME/$MTPCONFIG
+        rm -f $GADGETDIR/configs/$CONFIGNAME/$RNDISCONFIG
+        rm -f $GADGETDIR/configs/$CONFIGNAME/rndis.usb0
+        rm -f $GADGETDIR/configs/$CONFIGNAME/rndis_bam.rndis
+
+        printf "$USBMODE" > $GADGETDIR/functions/$MTPCONFIG/os_desc/interface.MTP/compatible_id
+        if [ "$IS_EXYNOS" = "true" ]; then
+            printf "Conf 1" > $GADGETDIR/configs/c.1/strings/0x409/configuration
+            printf "0x3f" > $GADGETDIR/configs/c.1/MaxPower
+        else
+            printf "$USBMODE" > $GADGETDIR/configs/$CONFIGNAME/strings/0x409/configuration
+        fi
+
+        ln -s $GADGETDIR/functions/$MTPCONFIG $GADGETDIR/configs/$CONFIGNAME
+        printf "1" > $GADGETDIR/os_desc/use
+        if [ "$IS_EXYNOS" = "true" ]; then
+            printf "0" > $ANDROID_USB/enable
+            printf "0x6860" > $GADGETDIR/idProduct
+            printf "0x04E8" > $GADGETDIR/idVendor
+            printf "mtp,acm" > $ANDROID_USB/functions
+            printf "0" > $GADGETDIR/bDeviceClass
+            printf "$CONTROLLER" > $GADGETDIR/UDC
+            printf "1" > $ANDROID_USB/enable
+        else
+            printf "$CONTROLLER" > $GADGETDIR/UDC
+        fi
+    elif [ "$METHOD" = "android_usb" ]; then
+        printf "0" > $ANDROID_USB/enable
+        printf "" > $ANDROID_USB/functions
+        printf "1" > $ANDROID_USB/enable
+        printf "0" > $ANDROID_USB/enable
+        printf "$IDVENDOR" > $ANDROID_USB/idVendor
+        printf "$IDPRODUCT" > $ANDROID_USB/idProduct
+        printf "$MANUFACTURER" > $ANDROID_USB/iManufacturer
+        printf "$PRODUCT" > $ANDROID_USB/iProduct
+        printf "$SERIALNUMBER" > $ANDROID_USB/iSerial
+        printf "0" > $ANDROID_USB/bDeviceClass
+        printf "0" > $ANDROID_USB/bDeviceSubClass
+        printf "0" > $ANDROID_USB/bDeviceProtocol
+        printf "mtp" > $ANDROID_USB/functions
+        printf "1" > $ANDROID_USB/enable
+    fi
+
+    setprop sys.usb.state $USBMODE
+
+    echo "Configured for $USBMODE"
+elif [ "$USBMODE" = "rndis" ]; then
+    if [ "$METHOD" = "configfs" ]; then
+         mkdir -p $GADGETDIR/functions/rndis.gs4
+         mkdir -p $GADGETDIR/strings/0x409
+         mkdir -p $GADGETDIR/configs/$CONFIGNAME/strings/0x409
+
+         printf "" > $GADGETDIR/UDC 2>/dev/null || true
+         printf "0x12d1" > $GADGETDIR/idVendor
+         printf "0x108a" > $GADGETDIR/idProduct
+         printf "$SERIALNUMBER" > $GADGETDIR/strings/0x409/serialnumber
+         printf "$MANUFACTURER" > $GADGETDIR/strings/0x409/manufacturer
+         printf "$PRODUCT" > $GADGETDIR/strings/0x409/product
+         printf "rndis" > $GADGETDIR/configs/$CONFIGNAME/strings/0x409/configuration
+         printf "1" > $ANDROID_USB/f_rndis/wceis 2>/dev/null || true
+
+         rm -f $GADGETDIR/configs/$CONFIGNAME/f* $GADGETDIR/configs/$CONFIGNAME/rndis*
+         ln -s $GADGETDIR/functions/rndis.gs4 $GADGETDIR/configs/$CONFIGNAME/f1
+         printf "9" > /sys/devices/virtual/android_usb/android0/port_mode 2>/dev/null || true
+         printf "hisi-usb-otg" > $GADGETDIR/UDC
+
+    elif [ "$METHOD" = "android_usb" ]; then
+        printf "0" > $ANDROID_USB/enable
+        printf "" > $ANDROID_USB/functions
+        printf "1" > $ANDROID_USB/enable
+        printf "0" > $ANDROID_USB/enable
+        printf "$IDVENDOR" > $ANDROID_USB/idVendor
+        printf "$IDPRODUCT" > $ANDROID_USB/idProduct
+        printf "$MANUFACTURER" > $ANDROID_USB/iManufacturer
+        printf "$PRODUCT" > $ANDROID_USB/iProduct
+        printf "$SERIALNUMBER" > $ANDROID_USB/iSerial
+        printf "239" > $ANDROID_USB/bDeviceClass
+        printf "2" > $ANDROID_USB/bDeviceSubClass
+        printf "1" > $ANDROID_USB/bDeviceProtocol
+        printf "rndis" > $ANDROID_USB/functions
+        printf "1" > $ANDROID_USB/enable
+    fi
+
+    setprop sys.usb.state $USBMODE
+
+    if grep usb0 /proc/net/dev >/dev/null
+    then
+       RNDIS_DEVICE=usb0
+    else
+       RNDIS_DEVICE=rndis0
+    fi
+
+    ifconfig $RNDIS_DEVICE 10.15.19.82 netmask 255.255.255.0
+
+    mkdir -p /run/hybris-usb
+    touch /run/hybris-usb/dhcpd4.lease
+
+    echo "Configured for $USBMODE"
+
+    dhcpd -f -4 -q -cf /etc/hybris-usb/dhcpd.conf -pf /run/hybris-usb/dhcpd4.pid -lf /run/hybris-usb/dhcpd4.lease $RNDIS_DEVICE
+
+elif [ "$USBMODE" = "none" ]; then
+    if [ "$METHOD" = "configfs" ]; then
+        rm -f $GADGETDIR/configs/$CONFIGNAME/$MTPCONFIG
+        rm -f $GADGETDIR/configs/$CONFIGNAME/$RNDISCONFIG
+        rm -f $GADGETDIR/configs/$CONFIGNAME/rndis.usb0
+        rm -f $GADGETDIR/configs/$CONFIGNAME/rndis_bam.rndis
+        rm -f $GADGETDIR/configs/$CONFIGNAME/rndis.0
+    elif [ "$METHOD" = "android_usb" ]; then
+        printf "0" > $ANDROID_USB/enable
+        printf "" > $ANDROID_USB/functions
+        printf "1" > $ANDROID_USB/enable
+        printf "0" > $ANDROID_USB/enable
+        printf "0" > $ANDROID_USB/bDeviceClass
+        printf "0" > $ANDROID_USB/bDeviceSubClass
+        printf "0" > $ANDROID_USB/bDeviceProtocol
+    fi
+
+    setprop sys.usb.state ""
+
+    echo "Configured for $USBMODE"
+fi
+
+target_error=$(readlink /tmp/mtp-server.ERROR)
+target_info=$(readlink /tmp/mtp-server.INFO)
+target_warning=$(readlink /tmp/mtp-server.WARNING)
+
+for file in /tmp/mtp-server.*; do
+    if [ -L "$file" ]; then
+        continue
+    fi
+
+    if [ "$file" = "/tmp/$target_error" ] || [ "$file" = "/tmp/$target_info" ] || [ "$file" = "/tmp/$target_warning" ]; then
+        continue
+    fi
+
+    rm -f "$file"
+done
+
+
+exit 0

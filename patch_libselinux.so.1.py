@@ -1,0 +1,5 @@
+data = open('libselinux.so.1.orig', 'rb').read()
+patched = data.replace(b'selinuxfs\x00', b'selinuxNO\x00').replace(b'selinuxfs \x00', b'selinuxNO \x00')
+assert len(patched) == len(data)
+open('libselinux.so.1.patched', 'wb').write(patched)
+print('Replaced:', data.count(b'selinuxfs\x00') + data.count(b'selinuxfs \x00'))
